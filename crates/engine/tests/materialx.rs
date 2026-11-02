@@ -73,6 +73,28 @@ fn off_by_default_and_warns_without_openpbr_maps() {
 }
 
 #[test]
+fn float_colour_maps_are_tagged_linear() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    let dir = temp("exr");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "format": "exr", "materialX": true})).unwrap();
+    let mtlx = files(&r).into_iter().find(|f| f.ends_with(".mtlx")).unwrap();
+    let text = std::fs::read_to_string(mtlx).unwrap();
+    assert!(text.contains("_base_color.exr\" colorspace=\"lin_rec709\"") && !text.contains("srgb_texture"), "{text}");
+}
+
+#[test]
+fn sets_with_the_same_file_name_warn_instead_of_overwriting() {
+    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
+    assert!(s.set_count() >= 2);
+    execute(&mut s, "textureSet.rename", &json!({"ts": 0, "name": "a b"})).unwrap();
+    execute(&mut s, "textureSet.rename", &json!({"ts": 1, "name": "A_B"})).unwrap();
+    let dir = temp("clash");
+    let r = execute(&mut s, "file.exportTextures", &json!({"dir": dir.display().to_string(), "preset": OPENPBR, "ts": "all", "materialX": true})).unwrap();
+    assert_eq!(files(&r).iter().filter(|f| f.ends_with(".mtlx")).count(), s.set_count() - 1, "{r}");
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("\"A_B\"")), "{r}");
+}
+
+#[test]
 fn udim_sets_use_the_udim_token() {
     let mut s = Session::new_project("t", primitives::udim_plane(), "builtin:udim_plane", None, 128).unwrap();
     let dir = temp("udim");
@@ -83,23 +105,6 @@ fn udim_sets_use_the_udim_token() {
     assert!(text.contains(".&lt;UDIM&gt;.png"), "{text}");
     assert!(!text.contains(".1001.") && !text.contains(".1002."), "{text}");
     assert!(all.iter().any(|f| f.ends_with(".1001.png")) && all.iter().any(|f| f.ends_with(".1002.png")));
-}
-
-#[test]
-fn sets_whose_names_sanitize_alike_get_their_own_material_files() {
-    let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();
-    execute(&mut s, "textureSet.rename", &json!({"ts": 0, "name": "Body Set"})).unwrap();
-    execute(&mut s, "textureSet.rename", &json!({"ts": 1, "name": "Body#Set"})).unwrap();
-    let dir = temp("alike");
-    let r = export(&mut s, &dir, OPENPBR, true);
-    let mut mtlx: Vec<String> = files(&r).into_iter().filter(|f| f.ends_with(".mtlx")).collect();
-    assert_eq!(mtlx.len(), 2, "{mtlx:?}");
-    mtlx.sort();
-    mtlx.dedup();
-    assert_eq!(mtlx.len(), 2, "two different files, none written twice: {mtlx:?}");
-    for f in &mtlx {
-        assert!(std::fs::read_to_string(f).unwrap().contains("<open_pbr_surface"), "{f}");
-    }
 }
 
 #[test]

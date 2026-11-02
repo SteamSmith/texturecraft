@@ -434,33 +434,40 @@ fn export_textures(s: &mut Session, p: &Value) -> Result<Value> {
 fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std::path::Path, warnings: &mut Vec<String>) -> Result<Vec<std::path::PathBuf>> {
     use texturecraft_formats::materialx::{self, Texture};
     let mesh_name = stem_of(s.doc.project.mesh.trim_start_matches("builtin:"));
-    if opts.normal_format == Some(NormalFormat::DirectX) {
-        warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
-    }
     let mut out = Vec::new();
+    let mut used_stems = std::collections::HashSet::new();
+    let mut normal_map_written = false;
     for &ts in sets {
         let set = s.doc.project.texture_set(ts).map_err(|e| EngineError::Other(e.to_string()))?;
         let mut textures: Vec<Texture> = Vec::new();
         for f in texturecraft_formats::list_outputs(&s.doc.project, ts, &mesh_name, opts).map_err(fe)? {
             let Some(input) = opts.preset.maps.get(f.map).and_then(|m| materialx::input_of_template(&m.file)) else { continue };
-            // The first tile stands for all of them: 1001 -> <UDIM>.
-            let file = match f.tile {
-                Some(t) => f.name.replacen(&format!(".{t}."), ".<UDIM>.", 1),
-                None => f.name.clone(),
-            };
+            // The first tile stands for all of them: its number is written as <UDIM>.
+            let file = f.udim_name.clone().unwrap_or_else(|| f.name.clone());
             if !textures.iter().any(|t| t.input == input) {
                 textures.push(Texture { input: input.to_owned(), file });
             }
         }
+        normal_map_written |= textures.iter().any(|t| t.input == "geometry_normal");
         if textures.is_empty() {
             warnings.push(format!("MaterialX: texture set \"{}\" has no OpenPBR maps; use the \"OpenPBR (separate maps)\" preset", set.name));
             continue;
         }
-        let stem = texturecraft_formats::export::sanitize_file_stem(&format!("{mesh_name}_{}", set.name));
+        // Two sets whose names sanitize alike must not write the same file.
+        let base_stem = texturecraft_formats::export::sanitize_file_stem(&format!("{mesh_name}_{}", set.name));
+        let (mut stem, mut suffix) = (base_stem.clone(), 2);
+        while !used_stems.insert(stem.to_ascii_lowercase()) {
+            stem = format!("{base_stem}_{suffix}");
+            suffix += 1;
+        }
         let path = dir.join(format!("{stem}.mtlx"));
         std::fs::write(&path, materialx::write(&format!("{mesh_name}_{}", set.name), &textures, None))
             .map_err(|e| bad("file.exportTextures", format!("cannot write {}: {e}", path.display())))?;
         out.push(path);
+    }
+    // The normalmap node only exists in a material that has a normal map.
+    if normal_map_written && opts.normal_format == Some(NormalFormat::DirectX) {
+        warnings.push("MaterialX: the normalmap node reads OpenGL (+Y) normals; this export wrote DirectX normals, so flip the green channel".into());
     }
     Ok(out)
 }

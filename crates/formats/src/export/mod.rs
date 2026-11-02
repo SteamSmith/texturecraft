@@ -362,6 +362,9 @@ pub struct PlannedFile {
     pub bit_depth: u8,
     /// UDIM number of the tile written (None: the whole set).
     pub tile: Option<u32>,
+    /// For a tiled file, `name` with the tile number written as `<UDIM>` (what a material that
+    /// covers every tile refers to); None when the file isn't tiled.
+    pub udim_name: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -473,6 +476,17 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
                 .replace("$textureSet", &set.name)
                 .replace("$channel", channel_label(map))
                 .replace("$colorSpace", color_space);
+            // The same name with the tile number as a placeholder, to write it as `<UDIM>` after.
+            let token_stem = tile.map(|_| {
+                let t = template
+                    .replace("$udim", "UDIMTOKEN")
+                    .replace("$project", &project.name)
+                    .replace("$mesh", mesh_name)
+                    .replace("$textureSet", &set.name)
+                    .replace("$channel", channel_label(map))
+                    .replace("$colorSpace", color_space);
+                sanitize_file_stem(&t)
+            });
             let stem = sanitize_file_stem(&stem);
             let ext = format.extension();
             let mut name = format!("{stem}.{ext}");
@@ -487,7 +501,12 @@ pub fn list_outputs(project: &Project, ts: usize, mesh_name: &str, opts: &Export
                 warnings.push(format!("\"{stem}.{ext}\" is produced by more than one map; this one was renamed to \"{name}\""));
             }
             used.insert(name.to_ascii_lowercase());
-            out.push(PlannedFile { name, map: i, format, bit_depth, tile, warnings });
+            // A tile number cut off by the length limit leaves no placeholder: then there is none.
+            let udim_name = token_stem.filter(|t| t.contains("UDIMTOKEN")).map(|t| {
+                let renamed = if k > 2 { format!("_{}", k - 1) } else { String::new() };
+                format!("{t}{renamed}.{ext}").replace("UDIMTOKEN", "<UDIM>")
+            });
+            out.push(PlannedFile { name, map: i, format, bit_depth, tile, udim_name, warnings });
         }
     }
     Ok(out)

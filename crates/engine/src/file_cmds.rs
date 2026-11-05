@@ -525,7 +525,10 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
 fn export_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "path", "file.exportMesh")?;
     let out = s.mesh_export(path, strp(p, "format"))?;
-    let write = |path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| bad("file.exportMesh", format!("cannot write {path}: {e}")));
+    // Atomic, so a full disk or a crash leaves the old file, not half of a new one.
+    let write = |path: &str, bytes: &[u8]| {
+        texturecraft_formats::write_atomic(std::path::Path::new(path), bytes).map_err(|e| bad("file.exportMesh", format!("cannot write {path}: {e}")))
+    };
     let dir = std::path::Path::new(&out.path).parent().unwrap_or(std::path::Path::new(""));
     let mut textures = Vec::new();
     for (name, bytes) in &out.textures {

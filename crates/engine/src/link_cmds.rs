@@ -279,8 +279,11 @@ impl LinkJob {
     }
 }
 
+/// Most texels one map may have: 8192 x 8192, the largest texture set. Decoded as RGBA f32 that is
+/// 1 GiB, so without this a single 16384 x 16384 map (a tiny PNG) would decode to 4 GiB.
+const MAX_MAP_TEXELS: u64 = 8192 * 8192;
 /// Most texels all of a material's maps may decode to together: nine usages at 8192 x 8192.
-const MAX_DECODED_TEXELS: u64 = 9 * 8192 * 8192;
+const MAX_DECODED_TEXELS: u64 = 9 * MAX_MAP_TEXELS;
 
 /// Decode every map of `m` (validating them) with the channel it feeds. A usage listed more than
 /// once is decoded once (the last listing wins, as it did when each listing was painted over the
@@ -299,7 +302,7 @@ fn decoded_maps_within(m: &PortableMaterial, max_texels: u64) -> Result<Vec<(Cha
         if listed.iter().skip(i + 1).any(|(later, _)| later == c) {
             continue;
         }
-        let img = texturecraft_formats::decode_image_within(bytes, left).map_err(|e| EngineError::Other(format!("{} map: {e}", c.id())))?;
+        let img = texturecraft_formats::decode_image_within(bytes, left.min(MAX_MAP_TEXELS)).map_err(|e| EngineError::Other(format!("{} map: {e}", c.id())))?;
         left = left.saturating_sub(u64::from(img.width) * u64::from(img.height));
         out.push((*c, (*bytes).clone(), img));
     }
@@ -503,6 +506,17 @@ mod tests {
         let base = maps.iter().find(|(c, ..)| *c == Channel::BaseColor).unwrap();
         assert_eq!(base.2.width, 8);
         assert_eq!(maps.len(), 2);
+    }
+
+    #[test]
+    fn one_map_over_the_per_map_limit_is_refused_though_the_total_would_allow_it() {
+        // 8193 x 8192 grey: one column over 8192 x 8192, tiny as a PNG. The nine-map total allows it,
+        // the per-map limit must not (a 16384 x 16384 map would decode to 4 GiB).
+        let mut grey = Vec::new();
+        image::GrayImage::new(8193, 8192).write_to(&mut std::io::Cursor::new(&mut grey), image::ImageFormat::Png).unwrap();
+        assert!(grey.len() < 1 << 20, "{}", grey.len());
+        let m = material(vec![("baseColor", grey)]);
+        assert!(decoded_maps(&m).is_err());
     }
 
     #[test]

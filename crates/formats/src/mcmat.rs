@@ -206,6 +206,20 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_manifest_is_refused() {
+        // A manifest is a few kilobytes; one over MAX_MANIFEST (here a 2 MiB name) is not read.
+        let manifest = serde_json::json!({"format": "craft-material", "version": 1, "name": "x".repeat(2 << 20), "graph": "M", "size": [4, 4], "maps": [], "source": "source.mcraft"});
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default();
+        z.start_file("material.json", o).unwrap();
+        z.write_all(manifest.to_string().as_bytes()).unwrap();
+        z.start_file("source.mcraft", o).unwrap();
+        z.write_all(b"pkg").unwrap();
+        let bytes = z.finish().unwrap().into_inner();
+        assert!(matches!(read_mcmat(&bytes), Err(FormatError::TooLarge(_))));
+    }
+
+    #[test]
     fn too_many_maps_are_refused() {
         let names: Vec<String> = (0..=MAX_MAPS).map(|_| "m.png".to_string()).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();

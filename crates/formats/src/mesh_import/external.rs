@@ -167,6 +167,20 @@ mod tests {
         } else {
             eprintln!("skipped the link case: this system would not make a link");
         }
+        // A link that stays inside the folder is an ordinary shortcut and still works.
+        if link_dir(&dir.join("shortcut"), &dir.join("tex")) {
+            assert_eq!(read_inside(&dir, "shortcut/a.png").as_deref(), Some(&b"inside"[..]), "through a link to a folder inside");
+        }
+        // A link to a single outside file (Unix symbolic links; Windows file links need privileges).
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.join("key.txt"), dir.join("tex/key.png")).unwrap();
+            assert_eq!(read_inside(&dir, "tex/key.png"), None, "through a link to an outside file");
+        }
+        // The mesh's own folder reached through a link is fine: both sides are resolved.
+        if link_dir(&base.join("alias"), &dir) {
+            assert_eq!(read_inside(&base.join("alias"), "tex/a.png").as_deref(), Some(&b"inside"[..]), "folder given through a link");
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

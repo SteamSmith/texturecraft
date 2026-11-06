@@ -219,13 +219,19 @@ pub fn materialcraft_tool(name: &str, env: &str) -> std::path::PathBuf {
 /// has that name) and, on Unix, readable by its owner only. Names are `<prefix>-<pid>-<n>`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn private_temp_dir(prefix: &str) -> Result<std::path::PathBuf> {
+    private_dir_in(&std::env::temp_dir(), prefix, || NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
+/// [`private_temp_dir`] under `base`, taking its numbers from `next`.
+#[cfg(not(target_arch = "wasm32"))]
+fn private_dir_in(base: &std::path::Path, prefix: &str, mut next: impl FnMut() -> u64) -> Result<std::path::PathBuf> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     let mut last = None;
     for _ in 0..64 {
-        let n = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()));
+        let dir = base.join(format!("{prefix}-{}-{}", std::process::id(), next()));
         match builder.create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
@@ -469,7 +475,7 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::private_temp_dir;
+    use super::{private_dir_in, private_temp_dir};
 
     #[test]
     fn private_temp_dirs_are_new_empty_and_distinct() {
@@ -480,14 +486,29 @@ mod tests {
             assert!(d.is_dir());
             assert_eq!(std::fs::read_dir(d).unwrap().count(), 0);
         }
-        // A name that is already taken is skipped, never reused.
-        let taken =
-            std::env::temp_dir().join(format!("texturecraft-test2-{}-{}", std::process::id(), super::NEXT_JOB.load(std::sync::atomic::Ordering::Relaxed)));
-        let _ = std::fs::create_dir(&taken);
-        let c = private_temp_dir("texturecraft-test2").unwrap();
-        assert_ne!(c, taken);
-        for d in [a, b, c, taken] {
+        for d in [a, b] {
             let _ = std::fs::remove_dir(d);
         }
+    }
+
+    #[test]
+    fn a_taken_name_is_skipped_never_reused() {
+        let base = std::env::temp_dir().join(format!("tc-private-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // Another user's folder (or file) already has the first two names.
+        std::fs::create_dir(base.join(format!("p-{}-0", std::process::id()))).unwrap();
+        std::fs::write(base.join(format!("p-{}-1", std::process::id())), b"planted").unwrap();
+        let mut n = 0;
+        let dir = private_dir_in(&base, "p", || {
+            n += 1;
+            n - 1
+        })
+        .unwrap();
+        assert_eq!(dir, base.join(format!("p-{}-2", std::process::id())));
+        assert_eq!(std::fs::read(base.join(format!("p-{}-1", std::process::id()))).unwrap(), b"planted", "the planted file is untouched");
+        // Nothing free at all is an error, not a loop or a panic.
+        assert!(private_dir_in(&base, "p", || 0).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

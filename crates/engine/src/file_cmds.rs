@@ -658,6 +658,17 @@ mod tests {
         // Base color, ORM and normal per texture set.
         assert_eq!(bytes.windows(9).filter(|w| *w == b"image/png").count(), 3 * s.mesh.materials.len());
         assert!(crate::execute(&mut s, "file.exportMesh", &json!({ "path": base, "format": "fbx" })).is_err());
+        // The writes are atomic: no half-written `.tmp` sibling is left, and a rewrite replaces the file.
+        std::fs::write(dir.join("ball.obj"), b"old").unwrap();
+        crate::execute(&mut s, "file.exportMesh", &json!({ "path": base })).unwrap();
+        assert!(std::fs::read_to_string(dir.join("ball.obj")).unwrap().contains("mtllib ball.mtl"), "replaced");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        // A target that cannot be replaced (a folder) is an error that leaves no `.tmp` behind either.
+        std::fs::remove_file(dir.join("ball.obj")).unwrap();
+        std::fs::create_dir(dir.join("ball.obj")).unwrap();
+        assert!(crate::execute(&mut s, "file.exportMesh", &json!({ "path": base })).is_err());
+        assert!(!dir.join("ball.obj.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

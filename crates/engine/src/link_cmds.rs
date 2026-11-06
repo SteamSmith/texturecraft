@@ -281,16 +281,48 @@ impl LinkJob {
 
 /// Most texels one map may have: 8192 x 8192, the largest texture set. Decoded as RGBA f32 that is
 /// 1 GiB, so without this a single 16384 x 16384 map (a tiny PNG) would decode to 4 GiB.
+/// (Same limit as `formats::MAX_RESOURCE_TEXELS` once #224 lands; use that constant then.)
 const MAX_MAP_TEXELS: u64 = 8192 * 8192;
-/// Most texels all of a material's maps may decode to together: nine usages at 8192 x 8192.
+/// Most texels all of a material's maps may decode to together: nine usages at 8192 x 8192 (9 GiB
+/// as RGBA f32). A material with more or bigger maps is not refused: its later maps are decoded at
+/// a lower size (see [`shrink_to`]) so the whole stays inside this budget.
 const MAX_DECODED_TEXELS: u64 = 9 * MAX_MAP_TEXELS;
 
 /// Decode every map of `m` (validating them) with the channel it feeds. A usage listed more than
 /// once is decoded once (the last listing wins, as it did when each listing was painted over the
 /// one before), and the maps together stay within [`MAX_DECODED_TEXELS`], so a `.mcmat` can't
-/// multiply one small image into gigabytes of pixels.
+/// multiply one small image into gigabytes of pixels. A map that would go over its fair share of
+/// what is left is halved (2 x 2 average) until it fits, so an honest material with ten or more 8K
+/// maps still links, at a lower resolution for the maps that don't fit.
 fn decoded_maps(m: &PortableMaterial) -> Result<Vec<(Channel, Vec<u8>, texturecraft_formats::DecodedImage)>> {
     decoded_maps_within(m, MAX_DECODED_TEXELS)
+}
+
+/// Halve `img` (average of each 2 x 2 block) until it has at most `max_texels` texels (or is 1 x 1).
+fn shrink_to(mut img: texturecraft_formats::DecodedImage, max_texels: u64) -> texturecraft_formats::DecodedImage {
+    while u64::from(img.width) * u64::from(img.height) > max_texels && (img.width > 1 || img.height > 1) {
+        let (w, h) = (img.width as usize, img.height as usize);
+        let (nw, nh) = (w.div_ceil(2), h.div_ceil(2));
+        let mut rgba = Vec::with_capacity(nw * nh);
+        for y in 0..nh {
+            for x in 0..nw {
+                let mut sum = [0.0f32; 4];
+                let mut n = 0.0f32;
+                for (sy, sx) in [(2 * y, 2 * x), (2 * y, 2 * x + 1), (2 * y + 1, 2 * x), (2 * y + 1, 2 * x + 1)] {
+                    if let Some(p) = img.rgba.get(sy * w + sx).filter(|_| sx < w && sy < h) {
+                        for k in 0..4 {
+                            sum[k] += p[k];
+                        }
+                        n += 1.0;
+                    }
+                }
+                let n = n.max(1.0);
+                rgba.push(sum.map(|v| v / n));
+            }
+        }
+        img = texturecraft_formats::DecodedImage { width: nw as u32, height: nh as u32, rgba, srgb: img.srgb };
+    }
+    img
 }
 
 fn decoded_maps_within(m: &PortableMaterial, max_texels: u64) -> Result<Vec<(Channel, Vec<u8>, texturecraft_formats::DecodedImage)>> {
@@ -298,11 +330,16 @@ fn decoded_maps_within(m: &PortableMaterial, max_texels: u64) -> Result<Vec<(Cha
         m.maps.iter().filter_map(|(usage, bytes)| Some((Channel::ALL.into_iter().find(|c| c.id() == usage)?, bytes))).collect();
     let mut left = max_texels;
     let mut out = Vec::new();
+    let mut to_go = (0..listed.len()).filter(|i| !listed.iter().skip(i + 1).any(|(later, _)| *later == listed[*i].0)).count() as u64;
     for (i, (c, bytes)) in listed.iter().enumerate() {
         if listed.iter().skip(i + 1).any(|(later, _)| later == c) {
             continue;
         }
-        let img = texturecraft_formats::decode_image_within(bytes, left.min(MAX_MAP_TEXELS)).map_err(|e| EngineError::Other(format!("{} map: {e}", c.id())))?;
+        // This map's share: an equal part of what is left for it and the maps after it.
+        let share = (left / to_go.max(1)).max(1);
+        to_go = to_go.saturating_sub(1);
+        let img = texturecraft_formats::decode_image_within(bytes, MAX_MAP_TEXELS).map_err(|e| EngineError::Other(format!("{} map: {e}", c.id())))?;
+        let img = shrink_to(img, share);
         left = left.saturating_sub(u64::from(img.width) * u64::from(img.height));
         out.push((*c, (*bytes).clone(), img));
     }
@@ -522,8 +559,34 @@ mod tests {
     #[test]
     fn decoded_pixels_are_bounded_across_maps() {
         let m = material(vec![("baseColor", png(8)), ("roughness", png(8)), ("metallic", png(8))]);
-        // 3 x 64 texels fit in 200, but not in 150.
-        assert_eq!(decoded_maps_within(&m, 200).unwrap().len(), 3);
-        assert!(decoded_maps_within(&m, 150).is_err(), "the third map goes over the budget");
+        // 3 x 64 texels fit in 200 untouched; in 150 the maps are shrunk, never refused.
+        let total = |maps: &[(Channel, Vec<u8>, texturecraft_formats::DecodedImage)]| {
+            maps.iter().map(|(_, _, i)| u64::from(i.width) * u64::from(i.height)).sum::<u64>()
+        };
+        let full = decoded_maps_within(&m, 200).unwrap();
+        assert_eq!((full.len(), total(&full)), (3, 192));
+        let small = decoded_maps_within(&m, 150).unwrap();
+        assert_eq!(small.len(), 3);
+        assert!(total(&small) <= 150, "{}", total(&small));
+    }
+
+    #[test]
+    fn ten_maps_of_the_largest_size_still_link_at_a_lower_size() {
+        // The real budget is nine maps at 8192 x 8192; scaled down: nine 8 x 8 maps' worth of texels,
+        // ten 8 x 8 maps listed (base colour, normal, roughness, metallic, height, AO, emissive,
+        // opacity, specular, coat: an honest material). Used to fail the whole link.
+        let usages = ["baseColor", "normal", "roughness", "metallic", "height", "ambientOcclusion", "emissive", "opacity", "specular", "coatWeight"];
+        let m = material(usages.iter().map(|u| (*u, png(8))).collect());
+        let maps = decoded_maps_within(&m, 9 * 64).unwrap();
+        assert_eq!(maps.len(), 10, "every map is kept");
+        assert!(maps.iter().map(|(_, _, i)| u64::from(i.width) * u64::from(i.height)).sum::<u64>() <= 9 * 64);
+    }
+
+    #[test]
+    fn shrinking_averages_blocks_and_handles_odd_sizes() {
+        let img = texturecraft_formats::DecodedImage { width: 3, height: 1, rgba: vec![[0.0; 4], [1.0; 4], [1.0; 4]], srgb: true };
+        let s = shrink_to(img, 2);
+        assert_eq!((s.width, s.height), (2, 1));
+        assert_eq!(s.rgba, vec![[0.5; 4], [1.0; 4]]);
     }
 }

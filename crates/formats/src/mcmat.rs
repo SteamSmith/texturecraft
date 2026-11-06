@@ -24,8 +24,8 @@ const MAX_ENTRY: u64 = 512 << 20;
 /// Without it a manifest that lists one compressible entry many times would be read, and kept,
 /// once per listing.
 const MAX_TOTAL: u64 = 2 << 30;
-/// Largest `material.json` (a manifest is a few kilobytes).
-const MAX_MANIFEST: u64 = 16 << 20;
+/// Largest `material.json` (a manifest is a few kilobytes; 1 MiB holds thousands of parameters).
+const MAX_MANIFEST: u64 = 1 << 20;
 /// Most maps a manifest may list (there are nine usages).
 const MAX_MAPS: usize = 64;
 const KIND: &str = "MaterialCraft material";

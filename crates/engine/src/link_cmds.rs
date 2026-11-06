@@ -214,6 +214,27 @@ pub fn materialcraft_tool(name: &str, env: &str) -> std::path::PathBuf {
     std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join(&exe))).filter(|p| p.is_file()).unwrap_or_else(|| exe.into())
 }
 
+/// A new, empty directory under the temp folder, made for this process alone: it is created with
+/// `create_dir` (which fails if anything, such as a link planted by another local user, already
+/// has that name) and, on Unix, readable by its owner only. Names are `<prefix>-<pid>-<n>`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn private_temp_dir(prefix: &str) -> Result<std::path::PathBuf> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let mut last = None;
+    for _ in 0..64 {
+        let n = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()));
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(EngineError::Other(format!("{}: {e}", dir.display()))),
+        }
+    }
+    Err(EngineError::Other(format!("no free temporary folder for {prefix}: {}", last.map(|e| e.to_string()).unwrap_or_default())))
+}
+
 /// A command for a MaterialCraft executable that opens no console window.
 #[cfg(not(target_arch = "wasm32"))]
 fn quiet(program: &std::path::Path) -> std::process::Command {
@@ -240,9 +261,7 @@ impl LinkJob {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn run(&self) -> Result<Vec<u8>> {
         let other = |e: String| EngineError::Other(e);
-        let n = NEXT_JOB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("texturecraft-link-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| other(format!("{}: {e}", dir.display())))?;
+        let dir = private_temp_dir("texturecraft-link")?;
         let result = (|| {
             let utf8 = |p: &std::path::Path| p.to_str().map(str::to_string).ok_or_else(|| other(format!("{} is not a UTF-8 path", p.display())));
             let write = |name: &str, bytes: &[u8]| {
@@ -446,4 +465,29 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
         names.push(name);
     }
     names
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::private_temp_dir;
+
+    #[test]
+    fn private_temp_dirs_are_new_empty_and_distinct() {
+        let a = private_temp_dir("texturecraft-test").unwrap();
+        let b = private_temp_dir("texturecraft-test").unwrap();
+        assert_ne!(a, b);
+        for d in [&a, &b] {
+            assert!(d.is_dir());
+            assert_eq!(std::fs::read_dir(d).unwrap().count(), 0);
+        }
+        // A name that is already taken is skipped, never reused.
+        let taken =
+            std::env::temp_dir().join(format!("texturecraft-test2-{}-{}", std::process::id(), super::NEXT_JOB.load(std::sync::atomic::Ordering::Relaxed)));
+        let _ = std::fs::create_dir(&taken);
+        let c = private_temp_dir("texturecraft-test2").unwrap();
+        assert_ne!(c, taken);
+        for d in [a, b, c, taken] {
+            let _ = std::fs::remove_dir(d);
+        }
+    }
 }

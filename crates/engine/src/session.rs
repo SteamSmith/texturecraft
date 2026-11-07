@@ -648,6 +648,8 @@ impl Session {
         Ok(label)
     }
 
+    /// Bookkeeping after an undo or redo moved the document from `other` to the current one: mark it
+    /// modified, invalidate what changed, and keep the paint target valid.
     fn after_history(&mut self, other: &Document) {
         self.modified = true;
         self.revision = self.revision.wrapping_add(1);

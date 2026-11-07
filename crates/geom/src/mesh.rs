@@ -452,6 +452,7 @@ mod tests {
         assert!(m.validate().is_err());
     }
 
+    /// Validation rejects non-finite normals and non-finite or beyond-limit UVs, but accepts UDIM-style UVs.
     #[test]
     fn validate_refuses_non_finite_normals_and_absurd_uvs() {
         assert!(quad().validate().is_ok());

@@ -148,6 +148,7 @@ mod tests {
         TraceSet { material: 0, composite, height_strength: strength }
     }
 
+    /// Far-off UVs clamp to the nearest edge texel without overflow; NaN gives 0 and in-range sampling is unchanged.
     #[test]
     fn sampling_at_huge_or_far_uvs_clamps_to_the_edge_without_overflow() {
         let heights = Heights { w: 2, h: 2, data: vec![1.0, 2.0, 3.0, 4.0] };

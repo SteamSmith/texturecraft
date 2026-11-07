@@ -110,10 +110,12 @@ impl ImageRes {
 mod tests {
     use super::*;
 
+    /// A 2 x 2 black and white checker image for the sampling test.
     fn checker() -> ImageRes {
         ImageRes { width: 2, height: 2, rgba: vec![[0.0; 4], [1.0; 4], [1.0; 4], [0.0; 4]], srgb: false }
     }
 
+    /// Sampling at huge finite coordinates stays finite and within 0..=1 instead of overflowing.
     #[test]
     fn sampling_at_huge_finite_coordinates_does_not_overflow() {
         let img = checker();

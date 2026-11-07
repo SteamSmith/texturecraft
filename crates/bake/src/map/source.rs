@@ -106,6 +106,8 @@ impl<'a> Source<'a> {
     }
 }
 
+/// The material's base colour at `uv` (bilinear, wrapping), sRGB RGBA times its factor; white
+/// where there is no texture or the UV is not finite.
 fn base_color(material: &BaseColor, uv: Vec2) -> Vec4 {
     let sampled_color = if material.texels.is_empty() || !uv.is_finite() {
         Vec4::ONE
@@ -143,6 +145,7 @@ fn match_key(name: &str, suffix: &str, keys: &mut HashMap<String, u32>) -> u32 {
 mod tests {
     use super::*;
 
+    /// Sampling at huge but finite UVs returns a finite colour instead of overflowing.
     #[test]
     fn base_color_sampling_survives_huge_finite_uvs() {
         let material = BaseColor { factor: Vec4::ONE, width: 2, height: 2, texels: vec![[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255; 4]] };

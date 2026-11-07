@@ -514,6 +514,8 @@ fn rnm(base: Vec3, detail: Vec3) -> Vec3 {
     (t * t.dot(u) - u * t.z).normalize_or(Vec3::Z)
 }
 
+/// Builds the shading surface at a ray hit: interpolated geometry, normal and tangent frame, and the
+/// set's channel values (base colour, roughness, metallic, coat and so on) at the hit's UV.
 fn surface(scene: &TraceScene, tri: u32, u: f32, v: f32, o: Vec3, d: Vec3, t: f32) -> Option<Surface> {
     let m = &scene.mesh;
     let i = tri as usize * 3;
@@ -1049,6 +1051,7 @@ fn wrapped_texel(uv: Vec2, size: (u32, u32), dx: i32, dy: i32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `wrapped_texel` wraps offsets at the edges and stays inside the image for far-off UVs.
     #[test]
     fn texel_lookup_survives_far_off_uvs() {
         use super::wrapped_texel;

@@ -151,6 +151,8 @@ mod tests {
         return false;
     }
 
+    /// Files are read through ordinary paths and links that stay inside the folder, but not through a link
+    /// (folder or file) that leads outside it.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_link_in_the_mesh_folder_cannot_lead_outside_it() {

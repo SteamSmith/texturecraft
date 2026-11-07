@@ -205,6 +205,7 @@ mod tests {
         z.finish().unwrap().into_inner()
     }
 
+    /// A manifest over the size limit is refused as too large, without being read.
     #[test]
     fn an_oversized_manifest_is_refused() {
         // A manifest is a few kilobytes; one over MAX_MANIFEST (here a 2 MiB name) is not read.
@@ -219,6 +220,7 @@ mod tests {
         assert!(matches!(read_mcmat(&bytes), Err(FormatError::TooLarge(_))));
     }
 
+    /// More maps than the limit are refused, while a normal count still reads.
     #[test]
     fn too_many_maps_are_refused() {
         let names: Vec<String> = (0..=MAX_MAPS).map(|_| "m.png".to_string()).collect();
@@ -230,6 +232,7 @@ mod tests {
         assert_eq!(read_mcmat(&bytes).unwrap().maps.len(), 3);
     }
 
+    /// An entry listed over and over stops at the total budget, and an entry over the per-entry cap is refused.
     #[test]
     fn one_entry_listed_again_and_again_is_bounded_by_the_total() {
         // With small limits: 100 KiB entries, 250 KiB for the whole file. Zeros compress to nearly

@@ -325,6 +325,9 @@ fn shrink_to(mut img: texturecraft_formats::DecodedImage, max_texels: u64) -> te
     img
 }
 
+/// Decode the maps of `m` (one per usage, the last listing wins) within a total budget of `max_texels`.
+/// Each map gets an equal share of what is left; a map over its share is shrunk to fit, so no map is
+/// refused for the total. A single map over [`MAX_MAP_TEXELS`] is still refused, from its header.
 fn decoded_maps_within(m: &PortableMaterial, max_texels: u64) -> Result<Vec<(Channel, Vec<u8>, texturecraft_formats::DecodedImage)>> {
     let listed: Vec<(Channel, &Vec<u8>)> =
         m.maps.iter().filter_map(|(usage, bytes)| Some((Channel::ALL.into_iter().find(|c| c.id() == usage)?, bytes))).collect();
@@ -508,12 +511,14 @@ mod tests {
     use super::*;
     use texturecraft_formats::mcmat::{Manifest, MapEntry};
 
+    /// A blank `side` x `side` RGBA PNG, as bytes.
     fn png(side: u32) -> Vec<u8> {
         let mut out = Vec::new();
         image::RgbaImage::new(side, side).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
         out
     }
 
+    /// A portable material that lists the given (usage, image bytes) maps in order.
     fn material(maps: Vec<(&str, Vec<u8>)>) -> PortableMaterial {
         let manifest = Manifest {
             format: "craft-material".into(),
@@ -530,12 +535,14 @@ mod tests {
         PortableMaterial { manifest, maps: maps.into_iter().map(|(u, b)| (u.to_string(), b)).collect(), source: vec![] }
     }
 
+    /// However many times one usage is listed, it is decoded only once.
     #[test]
     fn a_usage_listed_many_times_is_decoded_once() {
         let m = material((0..64).map(|_| ("baseColor", png(4))).collect());
         assert_eq!(decoded_maps(&m).unwrap().len(), 1, "64 listings of one usage, one decoded image");
     }
 
+    /// When a usage is listed twice, the later image is the one that is kept.
     #[test]
     fn the_last_listing_of_a_usage_wins() {
         let m = material(vec![("baseColor", png(4)), ("roughness", png(2)), ("baseColor", png(8))]);
@@ -545,6 +552,7 @@ mod tests {
         assert_eq!(maps.len(), 2);
     }
 
+    /// A single map over the per-map limit is refused even when the total budget would allow it.
     #[test]
     fn one_map_over_the_per_map_limit_is_refused_though_the_total_would_allow_it() {
         // 8193 x 8192 grey: one column over 8192 x 8192, tiny as a PNG. The nine-map total allows it,
@@ -556,6 +564,7 @@ mod tests {
         assert!(decoded_maps(&m).is_err());
     }
 
+    /// Maps that do not fit the total budget are shrunk to fit, never refused, and the total stays within it.
     #[test]
     fn decoded_pixels_are_bounded_across_maps() {
         let m = material(vec![("baseColor", png(8)), ("roughness", png(8)), ("metallic", png(8))]);
@@ -570,6 +579,7 @@ mod tests {
         assert!(total(&small) <= 150, "{}", total(&small));
     }
 
+    /// A material with more big maps than the budget holds (ten against nine) still links, at a lower size.
     #[test]
     fn ten_maps_of_the_largest_size_still_link_at_a_lower_size() {
         // The real budget is nine maps at 8192 x 8192; scaled down: nine 8 x 8 maps' worth of texels,
@@ -582,6 +592,7 @@ mod tests {
         assert!(maps.iter().map(|(_, _, i)| u64::from(i.width) * u64::from(i.height)).sum::<u64>() <= 9 * 64);
     }
 
+    /// Shrinking averages 2x2 blocks and copes with an odd width or height.
     #[test]
     fn shrinking_averages_blocks_and_handles_odd_sizes() {
         let img = texturecraft_formats::DecodedImage { width: 3, height: 1, rgba: vec![[0.0; 4], [1.0; 4], [1.0; 4]], srgb: true };

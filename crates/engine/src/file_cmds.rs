@@ -522,6 +522,8 @@ fn write_materialx(s: &Session, sets: &[usize], opts: &ExportOptions, dir: &std:
     Ok(out)
 }
 
+/// `file.exportMesh`: exports the mesh in the requested format, writing its textures first and then the mesh
+/// file, each atomically, and returns the paths written.
 #[cfg(not(target_arch = "wasm32"))]
 fn export_mesh(s: &mut Session, p: &Value) -> Result<Value> {
     let path = native::path_param(p, "path", "file.exportMesh")?;
@@ -624,6 +626,7 @@ mod tests {
         assert!(saved.modified, "reimport must trigger the unsaved-changes prompt");
     }
 
+    /// Exports an OBJ by default and a textured GLB, with atomic writes: a rewrite replaces the file, no `.tmp` is left, and an unwritable target is an error.
     #[test]
     fn export_mesh_writes_obj_by_default_and_textured_glb() {
         let mut s = Session::new_project("t", primitives::material_ball(), "builtin:material_ball", None, 128).unwrap();

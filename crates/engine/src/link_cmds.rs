@@ -477,6 +477,7 @@ fn put_maps(s: &mut Session, stem: &str, maps: &[(Channel, Vec<u8>, texturecraft
 mod tests {
     use super::{private_dir_in, private_temp_dir};
 
+    /// Two private temp folders are different, existing and empty.
     #[test]
     fn private_temp_dirs_are_new_empty_and_distinct() {
         let a = private_temp_dir("texturecraft-test").unwrap();
@@ -491,6 +492,7 @@ mod tests {
         }
     }
 
+    /// Names already taken (a folder, a planted file) are skipped untouched, and no free name is an error.
     #[test]
     fn a_taken_name_is_skipped_never_reused() {
         let base = std::env::temp_dir().join(format!("tc-private-dir-{}", std::process::id()));

@@ -81,3 +81,26 @@ fn dragging_the_pattern_scale_keeps_balance_and_invert() {
     assert!(pattern.scale != DEFAULT_SCALE, "the drag applied");
     assert_eq!((pattern.balance, pattern.invert), (0.25, true), "balance and invert survive the drag");
 }
+
+/// The Seed slider is an f32; a Scale drag must not round a seed above 2^24 through it.
+#[test]
+fn dragging_the_pattern_scale_keeps_a_large_seed() {
+    let (mut h, layer) = harness();
+    texturecraft_engine::execute(
+        &mut h.state_mut().session,
+        "layer.fill.set",
+        &json!({"layer": layer, "channel": "roughness", "procedural": "grunge", "seed": 123_456_789u64}),
+    )
+    .unwrap();
+    h.run_steps(3);
+    let t = track(&h, "Pattern scale");
+    h.drag_at(egui::pos2(t.left() + 100.0, t.center().y));
+    h.run_steps(2);
+    h.drop_at(egui::pos2(t.left() + 100.0, t.center().y));
+    h.run_steps(3);
+    let l = h.state().session.doc.project.layers.get(&texturecraft_engine::core::LayerId(layer)).unwrap();
+    let LayerKind::Fill(f) = &l.kind else { panic!("fill") };
+    let Source::Procedural { pattern, .. } = f.source(Channel::Roughness) else { panic!("procedural") };
+    assert!(pattern.scale != DEFAULT_SCALE, "the drag applied");
+    assert_eq!(u64::from(pattern.seed), 123_456_789, "the seed survives the drag");
+}

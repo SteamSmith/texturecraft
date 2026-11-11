@@ -2176,7 +2176,7 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                     if let Some(merge) = r1.or(r2).or(r3) {
                         app.run(
                             "layer.fill.set",
-                            set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "low": low, "high": high, "merge": merge})),
+                            set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": seed as u64, "balance": pattern.balance, "invert": pattern.invert, "low": low, "high": high, "merge": merge})),
                         );
                     }
                     if c.kind() == ChannelKind::Color {
@@ -2191,7 +2191,7 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                         if changed {
                             app.run(
                                 "layer.fill.set",
-                                set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": pattern.seed, "low": lo, "high": hi})),
+                                set(json!({"procedural": pattern.kind.label(), "scale": s, "contrast": con, "seed": pattern.seed, "balance": pattern.balance, "invert": pattern.invert, "low": lo, "high": hi})),
                             );
                         }
                     }

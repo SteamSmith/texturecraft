@@ -258,12 +258,16 @@ impl Mesh {
         if (1..4).any(|i| corners[..i].contains(&corners[i])) {
             return None;
         }
-        let area = |i: usize, j: usize, k: usize| {
-            let p = |c: usize| self.positions.get(corners[c] as usize).copied();
-            let (p, q, r) = (p(i)?, p(j)?, p(k)?);
-            Some((q - p).cross(r - p).length_squared() > 0.0)
-        };
-        if area(0, 1, 2)? && area(0, 2, 3)? && corners.iter().all(|&c| self.uvs.get(c as usize).is_some_and(|uv| uv.is_finite())) {
+        let point = |c: usize| self.positions.get(corners[c] as usize).copied();
+        let (p0, p1, p2, p3) = (point(0)?, point(1)?, point(2)?, point(3)?);
+        let points = [p0, p1, p2, p3];
+        // Distinct corner indices can still share one position (a seam); MikkTSpace compares
+        // positions exactly and underflows when every triangle of a folded quad is dropped.
+        if (1..4).any(|i| points[..i].contains(&points[i])) {
+            return None;
+        }
+        let area = |p: Vec3, q: Vec3, r: Vec3| (q - p).cross(r - p).length_squared() > 0.0;
+        if area(p0, p1, p2) && area(p0, p2, p3) && corners.iter().all(|&c| self.uvs.get(c as usize).is_some_and(|uv| uv.is_finite())) {
             Some(corners)
         } else {
             None
@@ -681,7 +685,25 @@ mod tests {
         let before = m.tangents.clone();
         m.diagonals = vec![0b100, 0b001];
         m.compute_tangents();
-        assert!(tangent_gap(&m.tangents, &before) == (0.0, false) || tangent_gap(&m.tangents, &before).0 < 1e-3);
+        let (angle, flipped) = tangent_gap(&m.tangents, &before);
+        assert!(angle < 1e-3 && !flipped, "angle {angle}, flipped {flipped}");
+    }
+
+    #[test]
+    fn folded_quad_sharing_a_position_does_not_crash_mikktspace() {
+        // Corner 3 reuses corner 1's position with its own UV (a 4-line OBJ makes this). With
+        // only this quad in the mesh every MikkTSpace triangle used to be dropped and it crashed.
+        let mut m = Mesh::from_parts(
+            vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::X],
+            Some(vec![Vec3::Z; 4]),
+            vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(0.5, 0.5)],
+            vec![0, 1, 2, 0, 2, 3],
+            "Default",
+        )
+        .unwrap();
+        m.diagonals = vec![0b100, 0b001];
+        m.compute_tangents();
+        assert!(m.tangents.iter().all(|t| t.is_finite()), "{:?}", m.tangents);
     }
 
     #[test]

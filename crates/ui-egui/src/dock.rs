@@ -1479,8 +1479,15 @@ fn link_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: LayerId, link:
                 .link_package(layer)
                 // A folder of its own, so a file or link another user left under the same name in the temp folder is never written through.
                 .and_then(|b| {
-                    let path = texturecraft_engine::link_cmds::private_temp_dir("texturecraft-open")?.join(file);
-                    std::fs::write(&path, b.as_slice()).map_err(|e| texturecraft_engine::EngineError::Other(e.to_string()))?;
+                    // Folders from earlier hand-offs that are over a week old are removed first (MaterialCraft may still be using a young one).
+                    texturecraft_engine::link_cmds::sweep_old_temp_dirs("texturecraft-open", std::time::Duration::from_secs(7 * 24 * 3600));
+                    let dir = texturecraft_engine::link_cmds::private_temp_dir("texturecraft-open")?;
+                    let path = dir.join(file);
+                    if let Err(e) = std::fs::write(&path, b.as_slice()) {
+                        // Do not leave an empty folder (or a partial file) behind.
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(texturecraft_engine::EngineError::Other(e.to_string()));
+                    }
                     Ok(path)
                 })
                 .and_then(|path| texturecraft_engine::link_cmds::open_in_materialcraft(&path));

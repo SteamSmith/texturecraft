@@ -667,11 +667,18 @@ mod tests {
         assert!(std::fs::read_to_string(dir.join("ball.obj")).unwrap().contains("mtllib ball.mtl"), "replaced");
         let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+        // Atomic means replaced, not written through: a hard link to the old file keeps the old bytes (a plain `std::fs::write` would change them).
+        std::fs::write(dir.join("keep.obj"), b"kept").unwrap();
+        std::fs::remove_file(dir.join("ball.obj")).unwrap();
+        std::fs::hard_link(dir.join("keep.obj"), dir.join("ball.obj")).unwrap();
+        crate::execute(&mut s, "file.exportMesh", &json!({ "path": base })).unwrap();
+        assert_eq!(std::fs::read(dir.join("keep.obj")).unwrap(), b"kept", "the old file was written through");
+        assert!(std::fs::read_to_string(dir.join("ball.obj")).unwrap().contains("mtllib ball.mtl"));
         // A target that cannot be replaced (a folder) is an error that leaves no `.tmp` behind either.
         std::fs::remove_file(dir.join("ball.obj")).unwrap();
         std::fs::create_dir(dir.join("ball.obj")).unwrap();
         assert!(crate::execute(&mut s, "file.exportMesh", &json!({ "path": base })).is_err());
-        assert!(!dir.join("ball.obj.tmp").exists());
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

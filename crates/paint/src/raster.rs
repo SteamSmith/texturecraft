@@ -396,6 +396,27 @@ mod tests {
         }
     }
 
+    /// A stamp at the far edge of a grazing plane: the pixels beyond the edge are empty, so the
+    /// texels at the edge lie farther than every finite neighbour. They are in plain view, so they
+    /// must still be painted (the buffer can't prove them hidden, the exact test must decide).
+    #[test]
+    fn the_far_edge_of_a_grazing_surface_takes_paint() {
+        let plane = primitives::plane(2.0, 8);
+        for culling in [true, false] {
+            for pitch in [10.0, 3.0, 1.0, -3.0] {
+                if culling && pitch < 0.0 {
+                    continue;
+                }
+                for edge in [Vec3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)] {
+                    let all = painted_texels(&plane, &looking_down(pitch), edge, 0.3, culling, false);
+                    let seen = painted_texels(&plane, &looking_down(pitch), edge, 0.3, culling, true);
+                    assert!(all.len() > 200, "the stamp covers part of the plane: {}", all.len());
+                    assert_eq!(seen.len(), all.len(), "edge {edge} at {pitch} degrees (culling {culling}): every texel is in view");
+                }
+            }
+        }
+    }
+
     /// With backface culling off, a single-sided surface seen from behind still takes paint: the
     /// exact test starts on the eye's side of the surface, so it doesn't hit the surface itself.
     #[test]

@@ -1,5 +1,6 @@
 //! Issue #307: undoing "Add mask" left the paint target on the mask, so the next stroke was
-//! recorded as a mask stroke and created a new black mask.
+//! recorded as a mask stroke and created a new black mask. Undoing it is covered in
+//! `it/tools.rs`; these tests cover the other direction: redo of an add and undo/redo of a delete.
 use serde_json::{Value, json};
 use texturecraft_engine::geom::glam::Vec2;
 use texturecraft_engine::geom::primitives;
@@ -40,28 +41,6 @@ fn has_mask(s: &Session) -> bool {
 /// After undoing Add mask, the next stroke is a normal paint stroke, no mask is recreated,
 /// and the settled composite equals a full recomposite.
 #[test]
-fn a_stroke_after_undoing_a_mask_is_a_paint_stroke_and_matches_a_full_recomposite() {
-    let mut s = setup();
-    stroke(&mut s, [130, 130], [170, 150]);
-    run(&mut s, "mask.add.white");
-    run(&mut s, "edit.undo"); // removes the mask again
-    assert_eq!(s.target, StackTarget::Content);
-    stroke(&mut s, [167, 183], [207, 203]);
-    assert!(!has_mask(&s), "the stroke recreated the mask");
-
-    // The stroke should be a normal paint stroke on the layer.
-    let undone = run(&mut s, "edit.undo");
-    assert_eq!(undone["undone"], "Paint stroke", "the stroke after undoing the mask was recorded as {}", undone["undone"]);
-    run(&mut s, "edit.redo");
-
-    let settled = s.caches[0].composite.clone();
-    s.caches[0].invalidate_all(); // recomposite every tile
-    s.update();
-    assert!(settled == s.caches[0].composite, "the composite after the stroke differs from a full recomposite");
-}
-
-/// Undo then redo of Add mask: the next stroke goes into the mask again.
-#[test]
 fn redoing_add_mask_paints_into_the_mask_again() {
     let mut s = setup();
     stroke(&mut s, [130, 130], [170, 150]);
@@ -100,4 +79,35 @@ fn two_strokes_without_a_mask_are_both_paint_strokes() {
     stroke(&mut s, [167, 183], [207, 203]);
     let labels = s.history_labels();
     assert_eq!(&labels[labels.len() - 2..], ["Paint stroke", "Paint stroke"]);
+}
+
+#[test]
+fn undoing_a_mask_delete_returns_to_the_mask() {
+    let mut s = setup();
+    stroke(&mut s, [130, 130], [170, 150]);
+    run(&mut s, "mask.add.white");
+    run(&mut s, "mask.remove");
+    assert!(!has_mask(&s));
+    assert_eq!(s.target, StackTarget::Content);
+
+    run(&mut s, "edit.undo"); // brings the mask back
+    assert!(has_mask(&s));
+    assert_eq!(s.target, StackTarget::Mask);
+    stroke(&mut s, [167, 183], [207, 203]);
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Mask stroke"));
+}
+
+#[test]
+fn redoing_a_mask_delete_returns_to_the_content() {
+    let mut s = setup();
+    run(&mut s, "mask.add.white");
+    run(&mut s, "mask.remove");
+    run(&mut s, "edit.undo");
+    assert_eq!(s.target, StackTarget::Mask);
+    run(&mut s, "edit.redo"); // deletes the mask again
+    assert!(!has_mask(&s));
+    assert_eq!(s.target, StackTarget::Content);
+    stroke(&mut s, [130, 130], [170, 150]);
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint stroke"));
+    assert!(!has_mask(&s));
 }

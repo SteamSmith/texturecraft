@@ -758,8 +758,11 @@ impl Session {
             return;
         };
         let has_mask = |d: &Document| d.project.layers.get(&d.project.mask_owner(id)).is_some_and(|l| l.mask.is_some());
+        // An instance resolves its mask through its source, so its own override mask coming back
+        // does not change `has_mask`: look at the layer's own mask too.
+        let own = |d: &Document| d.project.layers.get(&id).is_some_and(|l| l.mask.is_some());
         let (now, before) = (has_mask(&self.doc), has_mask(other));
-        if now && !before {
+        if (now && !before) || (own(&self.doc) && !own(other)) {
             self.target = StackTarget::Mask;
         } else if !now && self.target == StackTarget::Mask {
             self.target = StackTarget::Content;

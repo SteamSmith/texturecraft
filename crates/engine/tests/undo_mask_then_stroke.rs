@@ -111,3 +111,25 @@ fn redoing_a_mask_delete_returns_to_the_content() {
     assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint stroke"));
     assert!(!has_mask(&s));
 }
+
+/// An instance whose source has a mask resolves its mask through the source, so restoring the
+/// instance's own override mask by undo must still send the next stroke to the mask.
+#[test]
+fn undoing_an_override_mask_delete_on_an_instance_returns_to_the_mask() {
+    let mut s = setup();
+    let src = s.selected_layer_id().unwrap();
+    run(&mut s, "mask.add.white");
+    let inst = execute(&mut s, "layer.instance", &json!({"layer": src.0})).unwrap()["layer"].as_u64().map(texturecraft_engine::core::LayerId).unwrap();
+    s.update();
+    assert_eq!(s.selected_layer_id(), Some(inst), "the new instance is selected");
+
+    run(&mut s, "mask.add.white"); // the instance's own override mask
+    assert!(has_mask(&s));
+    run(&mut s, "mask.remove");
+    assert!(!has_mask(&s), "the override is gone; the source mask still resolves");
+    assert_eq!(s.target, StackTarget::Content);
+
+    run(&mut s, "edit.undo"); // brings the override back
+    assert!(has_mask(&s));
+    assert_eq!(s.target, StackTarget::Mask);
+}

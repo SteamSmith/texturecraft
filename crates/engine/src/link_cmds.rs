@@ -255,7 +255,12 @@ fn sweep_old_dirs_in(base: &std::path::Path, prefix: &str, max_age: std::time::D
     let want = format!("{prefix}-");
     let mut removed = 0;
     for e in entries.flatten() {
-        if !e.file_name().to_string_lossy().starts_with(&want) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        // Only names of the generated shape: `<prefix>-` plus four dash-separated alphanumeric parts (see `unique_suffix`),
+        // so a user's own `<prefix>-backup` folder is never touched.
+        let Some(suffix) = name.strip_prefix(&want) else { continue };
+        let parts: Vec<&str> = suffix.split('-').collect();
+        if parts.len() != 4 || parts.iter().any(|p| p.is_empty() || !p.bytes().all(|b| b.is_ascii_alphanumeric())) {
             continue;
         }
         // `DirEntry::file_type` does not follow links, so a symlink (even to a folder) is not a directory here.
@@ -561,18 +566,24 @@ mod tests {
         let base = std::env::temp_dir().join(format!("tc-sweep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        std::fs::create_dir_all(base.join("texturecraft-open-a")).unwrap();
-        std::fs::write(base.join("texturecraft-open-a/x.mcraft"), b"x").unwrap();
+        std::fs::create_dir_all(base.join("texturecraft-open-1f-2a3b-7ff-0")).unwrap();
+        std::fs::write(base.join("texturecraft-open-1f-2a3b-7ff-0/x.mcraft"), b"x").unwrap();
+        std::fs::create_dir(base.join("texturecraft-open-backup")).unwrap();
         std::fs::create_dir(base.join("other-a")).unwrap();
         std::fs::create_dir(base.join("texturecraft-opened")).unwrap();
         std::fs::write(base.join("texturecraft-open-file"), b"f").unwrap();
         // Too young: kept.
         assert_eq!(sweep_old_dirs_in(&base, "texturecraft-open", Duration::from_secs(3600)), 0);
-        assert!(base.join("texturecraft-open-a/x.mcraft").exists());
+        assert!(base.join("texturecraft-open-1f-2a3b-7ff-0/x.mcraft").exists());
         // Old enough (zero age): only our folder goes.
         assert_eq!(sweep_old_dirs_in(&base, "texturecraft-open", Duration::ZERO), 1);
-        assert!(!base.join("texturecraft-open-a").exists());
-        assert!(base.join("other-a").is_dir() && base.join("texturecraft-opened").is_dir() && base.join("texturecraft-open-file").is_file());
+        assert!(!base.join("texturecraft-open-1f-2a3b-7ff-0").exists());
+        assert!(
+            base.join("other-a").is_dir()
+                && base.join("texturecraft-opened").is_dir()
+                && base.join("texturecraft-open-backup").is_dir()
+                && base.join("texturecraft-open-file").is_file()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

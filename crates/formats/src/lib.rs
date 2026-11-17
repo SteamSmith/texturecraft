@@ -117,20 +117,26 @@ pub fn unique_suffix() -> String {
 
 /// Write `bytes` to `path` atomically: a sibling temporary file first, then rename over the target.
 ///
-/// The temporary file has an unpredictable name (`<path>.<suffix>.tmp`) and is created exclusively
+/// The temporary file has an unpredictable name (`<folder>/.tc-<suffix>.tmp`, short so long destination names still fit) and is created exclusively
 /// (`create_new`, which never follows a link planted at that name), so a shared folder cannot be used to make the
 /// write land on another file. It is removed again if anything fails.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".{}.tmp", unique_suffix()));
-    let tmp = std::path::PathBuf::from(tmp);
+    // A short name that does not grow with the destination's, so a valid long file name still fits the 255-byte limit.
+    let tmp = path.parent().unwrap_or_else(|| std::path::Path::new("")).join(format!(".tc-{}.tmp", unique_suffix()));
+    // Keep the permissions of an existing target, as an in-place write did.
+    let perms = std::fs::metadata(path).ok().map(|m| m.permissions());
     let res = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&tmp)
-        .and_then(|mut f| f.write_all(bytes).and_then(|()| f.flush()))
+        .and_then(|mut f| {
+            if let Some(p) = perms {
+                f.set_permissions(p)?;
+            }
+            f.write_all(bytes).and_then(|()| f.flush())
+        })
         .and_then(|()| std::fs::rename(&tmp, path));
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -162,6 +168,39 @@ mod atomic_tests {
         assert!(write_atomic(&dir.join("dst"), b"x").is_err());
         let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names.iter().filter(|n| n.ends_with(".tmp")).count(), 1, "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Overwriting keeps the permissions the target had (a restricted export stays restricted).
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_the_target_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tc-write-atomic-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("secret.bin");
+        std::fs::write(&f, b"old").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&f, b"new").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"new");
+        assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A valid 250-byte destination name still works: the temporary name does not grow with it.
+    #[test]
+    fn write_atomic_handles_a_long_destination_name() {
+        let dir = std::env::temp_dir().join(format!("tc-write-atomic-long-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join(format!("{}.glb", "a".repeat(246)));
+        // Skip when the filesystem itself refuses such a name.
+        if std::fs::write(&f, b"probe").is_ok() {
+            write_atomic(&f, b"new").unwrap();
+            assert_eq!(std::fs::read(&f).unwrap(), b"new");
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a temporary file was left");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

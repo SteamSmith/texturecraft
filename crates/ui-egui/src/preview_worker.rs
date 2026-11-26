@@ -1,9 +1,13 @@
 //! Native preview rendering uses a separate thread pool
 //! Web requests render synchronously on the UI thread
 
-#[cfg(target_arch = "wasm32")]
-use crate::mask_shape::MaskShape;
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::orb_shape::OrbShape;
 use crate::preview_request::PreviewRequest;
+
+/// Image-owning requests still wanted by the UI and waiting to start
+#[cfg(not(target_arch = "wasm32"))]
+type PendingRequests = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, PreviewRequest>>>;
 
 /// Request key and rendered image; None on failure
 pub type PreviewResult = (String, Option<egui::ColorImage>);
@@ -15,10 +19,10 @@ pub enum PreviewWorker {
     NotStarted,
     /// Native worker; dropping the request sender ends it after pending work
     #[cfg(not(target_arch = "wasm32"))]
-    Running { requests: std::sync::mpsc::Sender<PreviewRequest>, results: std::sync::mpsc::Receiver<PreviewResult> },
+    Running { requests: std::sync::mpsc::Sender<(String, bool)>, pending: PendingRequests, results: std::sync::mpsc::Receiver<PreviewResult> },
     /// The web: requests render as they are made
-    #[cfg(target_arch = "wasm32")]
-    Inline { shape: MaskShape, results: Vec<PreviewResult> },
+    #[cfg(any(target_arch = "wasm32", test))]
+    Inline { shape: OrbShape, results: Vec<PreviewResult> },
     /// The worker could not start or stopped; requests are refused
     // The web has no thread to stop
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -27,27 +31,39 @@ pub enum PreviewWorker {
 
 impl PreviewWorker {
     /// Submit work, starting the worker on first use; false if it has stopped
-    /// Native results request a repaint
-    pub fn request(&mut self, ctx: &egui::Context, request: PreviewRequest) -> bool {
+    /// Completed results request a repaint so the UI polls them on the next pass
+    pub fn request(&mut self, context: &egui::Context, request: PreviewRequest) -> bool {
         if matches!(self, PreviewWorker::NotStarted) {
-            *self = PreviewWorker::start(ctx);
+            *self = PreviewWorker::start(context);
         }
 
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            PreviewWorker::Running { requests, .. } => {
-                if requests.send(request).is_ok() {
+            PreviewWorker::Running { requests, pending, .. } => {
+                let ticket = (request.key.clone(), request.hover);
+                pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(request.key.clone(), request);
+                if requests.send(ticket).is_ok() {
                     return true;
                 }
+
                 *self = PreviewWorker::Stopped;
                 false
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", test))]
             PreviewWorker::Inline { shape, results } => {
                 results.push((request.key.clone(), request.render(shape)));
+                context.request_repaint();
                 true
             }
             PreviewWorker::NotStarted | PreviewWorker::Stopped => false,
+        }
+    }
+
+    /// Release evicted inputs while the native worker finishes its current render
+    pub fn cancel(&mut self, _key: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let PreviewWorker::Running { pending, .. } = self {
+            pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(_key);
         }
     }
 
@@ -72,7 +88,7 @@ impl PreviewWorker {
                 }
                 ready
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", test))]
             PreviewWorker::Inline { results, .. } => std::mem::take(results),
             PreviewWorker::NotStarted | PreviewWorker::Stopped => Vec::new(),
         }
@@ -89,9 +105,11 @@ impl PreviewWorker {
         use std::collections::VecDeque;
         use std::sync::mpsc::channel;
 
-        use crate::mask_shape::MaskShape;
+        use crate::orb_shape::OrbShape;
 
-        let (requests, request_rx) = channel::<PreviewRequest>();
+        let (requests, request_rx) = channel();
+        let pending = PendingRequests::default();
+        let queued_inputs = std::sync::Arc::downgrade(&pending);
         let (result_tx, results) = channel();
         let ctx = ctx.clone();
         let spawned = std::thread::Builder::new().name("texturecraft-shelf-previews".into()).spawn(move || {
@@ -101,7 +119,7 @@ impl PreviewWorker {
             if let Err(e) = &pool {
                 log::warn!("shelf previews share the global thread pool: {e}");
             }
-            let mut shape = MaskShape::default();
+            let mut shape = OrbShape::default();
             let mut queue = VecDeque::new();
             loop {
                 if queue.is_empty() {
@@ -111,7 +129,9 @@ impl PreviewWorker {
                 }
                 queue.extend(request_rx.try_iter());
 
-                let Some(request) = next_request(&mut queue) else { continue };
+                let Some(key) = next_request(&mut queue) else { continue };
+                let request = queued_inputs.upgrade().and_then(|pending| pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&key));
+                let Some(request) = request else { continue };
 
                 let image = match &pool {
                     Ok(pool) => pool.install(|| request.render(&mut shape)),
@@ -125,7 +145,7 @@ impl PreviewWorker {
         });
 
         match spawned {
-            Ok(_) => PreviewWorker::Running { requests, results },
+            Ok(_) => PreviewWorker::Running { requests, pending, results },
             Err(e) => {
                 log::warn!("could not start the shelf preview worker: {e}");
                 PreviewWorker::Stopped
@@ -136,17 +156,18 @@ impl PreviewWorker {
     /// Render inline (no threads on the web)
     #[cfg(target_arch = "wasm32")]
     fn start(_ctx: &egui::Context) -> PreviewWorker {
-        PreviewWorker::Inline { shape: MaskShape::default(), results: Vec::new() }
+        PreviewWorker::Inline { shape: OrbShape::default(), results: Vec::new() }
     }
 }
 
 /// Prioritize the newest hover preview over older requests
 #[cfg(not(target_arch = "wasm32"))]
-fn next_request(queue: &mut std::collections::VecDeque<PreviewRequest>) -> Option<PreviewRequest> {
-    match queue.iter().rposition(|request| request.hover) {
+fn next_request(queue: &mut std::collections::VecDeque<(String, bool)>) -> Option<String> {
+    let (key, _) = match queue.iter().rposition(|(_, hover)| *hover) {
         Some(newest_hover) => queue.remove(newest_hover),
         None => queue.pop_front(),
-    }
+    }?;
+    Some(key)
 }
 
 #[cfg(test)]
@@ -154,11 +175,49 @@ mod tests {
     use std::collections::HashMap;
     use std::time::{Duration, Instant};
 
+    use texturecraft_engine::core::{Generator, GeneratorKind};
     use texturecraft_engine::materials::MATERIALS;
     use texturecraft_engine::smart_masks::SMART_MASKS;
 
     use super::*;
     use crate::shelf_preview::ShelfPreview;
+
+    #[test]
+    fn inline_results_schedule_a_frame_to_display_them() {
+        for id in ["steel", "nope"] {
+            let context = egui::Context::default();
+            for _ in 0..3 {
+                let mut output = context.run_pass(Default::default(), |_| {});
+
+                // No renderer consumes the texture updates in this scheduling test
+                output.textures_delta.clear();
+            }
+            assert!(!context.has_requested_repaint(), "the UI is idle before the request");
+
+            let mut worker = PreviewWorker::Inline { shape: OrbShape::default(), results: Vec::new() };
+            assert!(worker.poll().is_empty(), "the UI polls before submitting work");
+            let request = PreviewRequest { key: id.into(), preview: ShelfPreview::Material(id), size_px: 8, hover: false };
+            assert!(worker.request(&context, request));
+
+            let results = worker.poll();
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0].1.is_some(), id == "steel");
+            assert!(context.has_requested_repaint(), "the result needs another frame even when this is the only request");
+        }
+    }
+
+    #[test]
+    fn a_generator_as_set_renders_its_settings() {
+        let mut shape = OrbShape::default();
+        let render = |shape: &mut OrbShape, generator: Generator| {
+            let preview = ShelfPreview::GeneratorSet { generator: Box::new(generator), images: Vec::new() };
+            PreviewRequest { key: String::new(), preview, size_px: 16, hover: false }.render(shape).expect("an orb picture")
+        };
+
+        let plain = render(&mut shape, Generator::new(GeneratorKind::Dirt));
+        let inverted = render(&mut shape, Generator { invert: true, ..Generator::new(GeneratorKind::Dirt) });
+        assert_ne!(plain.pixels, inverted.pixels, "the picture follows the generator's settings");
+    }
 
     #[test]
     fn requests_are_answered_and_unknown_assets_get_none() {
@@ -170,23 +229,34 @@ mod tests {
             ("unknown material", ShelfPreview::Material("nope")),
             ("mask", ShelfPreview::SmartMask(SMART_MASKS[0].id)),
             ("unknown mask", ShelfPreview::SmartMask("nope")),
+            ("generator", ShelfPreview::Generator(GeneratorKind::Dirt)),
+            ("smart material", ShelfPreview::SmartMaterial("steel_painted_worn")),
+            ("unknown smart material", ShelfPreview::SmartMaterial("nope")),
         ];
+        let requests_sent = requests.len();
         for (key, preview) in requests {
             assert!(worker.request(&ctx, PreviewRequest { key: key.into(), preview, size_px, hover: false }), "{key}");
         }
 
         let mut answers = HashMap::new();
         let start = Instant::now();
-        while answers.len() < 4 && start.elapsed() < Duration::from_secs(120) {
+
+        // Coverage instrumentation slows the orb bake
+        let timeout = if std::env::var_os("LLVM_PROFILE_FILE").is_some() || std::env::var("RUSTFLAGS").is_ok_and(|f| f.contains("instrument-coverage")) {
+            Duration::from_secs(600)
+        } else {
+            Duration::from_secs(120)
+        };
+        while answers.len() < requests_sent && start.elapsed() < timeout {
             answers.extend(worker.poll());
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        for key in ["material", "mask"] {
+        for key in ["material", "mask", "generator", "smart material"] {
             let image = answers.get(key).and_then(Option::as_ref).unwrap_or_else(|| panic!("{key}: {answers:?}"));
             assert_eq!(image.size, [size_px, size_px], "{key}");
         }
-        for key in ["unknown material", "unknown mask"] {
+        for key in ["unknown material", "unknown mask", "unknown smart material"] {
             assert!(matches!(answers.get(key), Some(None)), "{key}: {answers:?}");
         }
         assert!(!worker.is_stopped());
@@ -194,11 +264,11 @@ mod tests {
 
     #[test]
     fn the_newest_hover_preview_goes_first_then_the_oldest_request() {
-        let request = |key: &str, hover| PreviewRequest { key: key.into(), preview: ShelfPreview::Material("steel"), size_px: 8, hover };
+        let request = |key: &str, hover| (key.to_owned(), hover);
         let mut queue: std::collections::VecDeque<_> =
             [request("thumbnail 1", false), request("old hover", true), request("thumbnail 2", false), request("new hover", true)].into();
 
-        let order: Vec<String> = std::iter::from_fn(|| next_request(&mut queue)).map(|r| r.key).collect();
+        let order: Vec<String> = std::iter::from_fn(|| next_request(&mut queue)).collect();
         assert_eq!(order, ["new hover", "old hover", "thumbnail 1", "thumbnail 2"]);
     }
 }

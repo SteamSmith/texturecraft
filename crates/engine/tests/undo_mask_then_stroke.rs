@@ -50,7 +50,7 @@ fn redoing_add_mask_paints_into_the_mask_again() {
     assert!(has_mask(&s));
     assert_eq!(s.target, StackTarget::Mask);
     stroke(&mut s, [167, 183], [207, 203]);
-    assert_eq!(s.history_labels().last().map(String::as_str), Some("Mask stroke"));
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint mask of Layer 2"));
     let id = s.selected_layer_id().unwrap();
     let mask = s.doc.project.layers.get(&id).unwrap().mask.as_ref().unwrap();
     assert_eq!(mask.effects.len(), 1, "the stroke should paint into the mask's paint effect");
@@ -67,7 +67,7 @@ fn undoing_a_paint_effect_then_stroking_paints_the_layer() {
     run(&mut s, "edit.undo"); // the mask
     assert_eq!(s.target, StackTarget::Content);
     stroke(&mut s, [130, 130], [170, 150]);
-    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint stroke"));
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint on Layer 2"));
     assert!(!has_mask(&s));
 }
 
@@ -78,7 +78,7 @@ fn two_strokes_without_a_mask_are_both_paint_strokes() {
     stroke(&mut s, [130, 130], [170, 150]);
     stroke(&mut s, [167, 183], [207, 203]);
     let labels = s.history_labels();
-    assert_eq!(&labels[labels.len() - 2..], ["Paint stroke", "Paint stroke"]);
+    assert_eq!(&labels[labels.len() - 2..], ["Paint on Layer 2", "Paint on Layer 2"]);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn undoing_a_mask_delete_returns_to_the_mask() {
     assert!(has_mask(&s));
     assert_eq!(s.target, StackTarget::Mask);
     stroke(&mut s, [167, 183], [207, 203]);
-    assert_eq!(s.history_labels().last().map(String::as_str), Some("Mask stroke"));
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint mask of Layer 2"));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn redoing_a_mask_delete_returns_to_the_content() {
     assert!(!has_mask(&s));
     assert_eq!(s.target, StackTarget::Content);
     stroke(&mut s, [130, 130], [170, 150]);
-    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint stroke"));
+    assert_eq!(s.history_labels().last().map(String::as_str), Some("Paint on Layer 2"));
     assert!(!has_mask(&s));
 }
 

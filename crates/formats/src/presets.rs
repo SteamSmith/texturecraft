@@ -166,7 +166,7 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
         // Sketchfab PBR metal-roughness: separate maps whose suffixes Sketchfab's importer
         // recognises (base color, normal, metallic, roughness, AO, emissive).
         preset(
-            "Sketchfab (PBR Metal Roughness)",
+            "Sketchfab",
             vec![
                 map("BaseColor", 8, base_with_alpha()),
                 map("Normal", 8, normal(VirtualMap::NormalOpenGl)),
@@ -267,8 +267,9 @@ const OLD_DEFAULT_PRESET: &str = "Document channels + Normal + AO";
 
 /// Largest texture edge (pixels) a built-in preset is meant for, if its target caps it.
 /// Roblox: 1024 is the figure community reports cite; the official limit is not confirmed
-/// (see `docs/export-roblox-sketchfab.md`). `ExportOptions::size` is per UV tile, so for a
-/// UV-tiled set divide this by the larger of the tile grid's columns and rows before passing it.
+/// (see `docs/export-roblox-sketchfab.md`). `ExportOptions::size` is per UV tile, so for an atlas
+/// divide this by the larger of the tile grid's columns and rows and round down to a power of two
+/// before passing it (1024 over three columns is 256, not 341: other sizes are rejected).
 pub fn preset_max_size(name: &str) -> Option<u32> {
     name.trim().eq_ignore_ascii_case("Roblox (SurfaceAppearance)").then_some(1024)
 }
